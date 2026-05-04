@@ -1,4 +1,4 @@
-name: 6.6.89 OPlus OKI Kernel Full Build
+name: 6.6.89 OPlus OKI Kernel Refined Build
 
 env:
   TZ: Asia/Shanghai
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU Branch'
+        description: 'KernelSU Type'
         required: true
         type: choice
         default: 'resukisu'
@@ -29,7 +29,7 @@ on:
         default: 'false'
         options: [ 'false', 'builtin', 'kpm' ]
       lz4_enable:
-        description: 'Enable LZ4 1.10.0 + ZSTD 1.5.7'
+        description: 'Enable LZ4+ZSTD'
         required: true
         type: boolean
         default: 'true'
@@ -39,255 +39,114 @@ on:
         type: boolean
         default: 'false'
       bbr_enable:
-        description: 'BBR Algorithm'
+        description: 'BBR'
         required: true
         type: choice
         default: 'false'
         options: [ 'false', 'true', 'default' ]
       better_net:
-        description: 'Network Features (ipset/iptables)'
+        description: 'Net Features'
         required: true
         type: boolean
         default: 'false'
       adios_enable:
-        description: 'Enable ADIOS IO Scheduler'
+        description: 'Enable ADIOS'
         required: true
         type: boolean
         default: 'true'
-      rekernel_enable:
-        description: 'Enable Re-Kernel'
-        required: true
-        type: boolean
-        default: 'false'
       baseband_guard:
-        description: 'Enable Baseband Guard (BBG)'
+        description: 'Enable BBG'
         required: true
         type: boolean
         default: 'true'
-      ccache_update:
-        description: 'Update Ccache'
-        required: true
-        type: boolean
-        default: 'false'
-      kernel_suffix:
-        description: 'Kernel Suffix'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      ksuver: ${{ steps.ksu_version.outputs.ksuver }}
-      ak3name: ${{ steps.create_zip.outputs.ak3name }}
-    permissions:
-      actions: write
-      contents: read
     steps:
-      - name: Environment Initialization
+      - name: Environment Setup
         run: |
           rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
-          sudo apt-mark hold firefox libc-bin && sudo apt purge man-db && sudo rm -rf /var/lib/man-db/auto-update
-          sudo apt update && sudo apt-get install -y --no-install-recommends binutils python-is-python3 libssl-dev libelf-dev aria2 wget
+          sudo apt update && sudo apt install -y --no-install-recommends binutils python-is-python3 libssl-dev libelf-dev aria2 wget
           
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/ccache-x86-64 -O ccache
-          sudo cp -f ./ccache /usr/bin/ccache && sudo chmod +x /usr/bin/ccache && rm -f ./ccache
-          
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/ccache-x86-64 -O ccache || true
+          [ -f ccache ] && { sudo cp -f ./ccache /usr/bin/ccache; sudo chmod +x /usr/bin/ccache; rm -f ./ccache; }
+
           aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8750/archive/refs/heads/oneplus/sm8750_v_16.0.0_oneplus_13_6.6.89.zip -o common.zip
-          unzip -q common.zip && mv "android_kernel_common_oneplus_sm8750-oneplus-sm8750_v_16.0.0_oneplus_13_6.6.89" common && rm -rf common.zip
+          unzip -q common.zip && mv android_kernel_common_oneplus_sm8750* common && rm common.zip
           
           mkdir -p clang18
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip -o clang.zip
-          unzip -q clang.zip -d clang18 && rm -rf clang.zip
+          unzip -q clang.zip -d clang18 && rm clang.zip
           
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/build-tools.zip -o build-tools.zip
-          unzip -q build-tools.zip && rm -rf build-tools.zip
-          
-          rm common/android/abi_gki_protected_exports_* || true
-          for f in common/scripts/setlocalversion; do
-            sed -i 's/ -dirty//g' "$f"
-          done
+          unzip -q build-tools.zip && mv build-tools* build-tools && rm build-tools.zip
 
-      - name: Setup Ccache Config
-        run: |
-          echo "CCACHE_DIR=$HOME/.ccache_${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
-
-      - name: Restore Ccache
-        uses: actions/cache@v5
-        id: ccache-restore
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            ${{ env.CCACHE_KEY }}-${{ runner.os }}-
-
-      - name: Fetch Public Ccache
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -d "${{ env.CCACHE_DIR }}" ] && [ "$(ls -A ${{ env.CCACHE_DIR }} 2>/dev/null)" ]; then
-            exit 0
-          fi
-          mkdir -p ${{ env.CCACHE_DIR }}
-          FILE_NAME="ccache-${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}.tar.zst"
-          if gh release download -p "$FILE_NAME" -R cctv18/public_ccache; then
-            tar -I zstd -xf "$FILE_NAME" -C ${{ env.CCACHE_DIR }}
-          fi
-
-      - name: Initialize KernelSU
+      - name: KernelSU Setup
         id: ksu_version
         run: |
           cd kernel_workspace
-          if [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
-            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/refs/heads/main/kernel/setup.sh" | bash -s builtin
-            cd ./KernelSU
-            KSU_VERSION=$(expr $(git rev-list --count main) + 37185)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-          elif [[ ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
+          if [[ ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/main/kernel/setup.sh" | bash -s main
-            echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
-            cd ./KernelSU
-            KSU_VERSION=$(expr $(git rev-list --count main) + 30700)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            [ -d KernelSU ] && cd KernelSU && KSU_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "30700") && echo "KSUVER=$((KSU_VERSION + 30700))" >> $GITHUB_ENV || echo "KSUVER=30700" >> $GITHUB_ENV
+          elif [[ ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/refs/heads/main/kernel/setup.sh" | bash -s builtin
+            [ -d KernelSU ] && cd KernelSU && KSU_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "37185") && echo "KSUVER=$((KSU_VERSION + 37185))" >> $GITHUB_ENV || echo "KSUVER=37185" >> $GITHUB_ENV
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-            cd KernelSU-Next
-            KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30000)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
-            cd ./KernelSU
-            KSU_VERSION=$(expr $(git rev-list --count main) + 30000)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            [ -d KernelSU-Next ] && cd KernelSU-Next && KSU_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo "30000") && echo "KSUVER=$((KSU_VERSION + 30000))" >> $GITHUB_ENV || echo "KSUVER=30000" >> $GITHUB_ENV
           fi
 
-      - name: Integrate SUSFS v1.5.12 & Patches
+      - name: SUSFS Integration
         if: inputs.susfs_enable
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd kernel_workspace
           git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
           
-          if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
-            git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-            git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4oki -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
-            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
-            
-            cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
-            cp ./susfs4oki/kernel_patches/fs/* ./common/fs/
-            cp ./susfs4oki/kernel_patches/include/linux/* ./common/include/linux/
-            
-            cd ./common
-            patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            patch -p1 -N -F 3 < 69_hide_stuff.patch || true
-            cd ..
-            
-            if [[ ${{ github.event.inputs.ksu_type }} == "resukisu" || ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
-              cp ./susfs4ksu/kernel_patches/SukiSU/10_enable_susfs_for_sukisu.patch ./KernelSU/
-              cd ./KernelSU && patch -p1 < 10_enable_susfs_for_sukisu.patch || true && cd ..
-            elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
-              cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-              cd ./KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch || true && cd ..
-            fi
-            
-            cat >> ./common/arch/arm64/configs/gki_defconfig <<EOF
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4oki -b oki-6.6 || git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4oki
+
+          cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-6.6.patch ./common/ 2>/dev/null || cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/ || true
+          cp -r ./susfs4oki/kernel_patches/fs/* ./common/fs/ || true
+          cp -r ./susfs4oki/kernel_patches/include/linux/* ./common/include/linux/ || true
+          
+          cd common
+          patch -p1 < 50_add_susfs_in_gki-*.patch || true
+          cd ..
+
+          if [[ ${{ github.event.inputs.ksu_type }} == "resukisu" || ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
+            cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/ 2>/dev/null || true
+            cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch || true && cd ..
+          fi
+
+          cat >> ./common/arch/arm64/configs/gki_defconfig <<EOF
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
           CONFIG_KSU_SUSFS_SPOOF_UNAME=y
           EOF
-          fi
 
-      - name: Apply LZ4 / ADIOS / BBG / Network
-        run: |
-          cd kernel_workspace
-          # LZ4/ZSTD
-          if [[ "${{ inputs.lz4_enable }}" == "true" ]]; then
-            git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME build_assets
-            cp ./build_assets/zram_patch/001-lz4.patch ./common/
-            cp ./build_assets/zram_patch/lz4armv8.S ./common/lib/
-            cp ./build_assets/zram_patch/002-zstd.patch ./common/
-            cd ./common && git apply -p1 < 001-lz4.patch || true && patch -p1 < 002-zstd.patch || true && cd ..
-          fi
-          # LZ4KD
-          if [[ "${{ inputs.lz4kd_enable }}" == "true" ]]; then
-            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
-            cd common
-            cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
-            cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
-            cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
-            cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
-            patch -p1 -F 3 < lz4kd.patch || true && cd ..
-          fi
-          # ADIOS/BBG/Net/BBR
-          cd common
-          [[ "${{ inputs.adios_enable }}" == "true" ]] && { echo "CONFIG_MQ_IOSCHED_ADIOS=y"; echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y"; } >> arch/arm64/configs/gki_defconfig
-          [[ "${{ inputs.rekernel_enable }}" == "true" ]] && echo "CONFIG_REKERNEL=y" >> arch/arm64/configs/gki_defconfig
-          [[ "${{ inputs.baseband_guard }}" == "true" ]] && { echo "CONFIG_BBG=y"; curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash; } >> arch/arm64/configs/gki_defconfig
-          [[ "${{ inputs.better_net }}" == "true" ]] && { echo "CONFIG_IP_SET=y"; echo "CONFIG_IP_SET_HASH_IP=y"; } >> arch/arm64/configs/gki_defconfig
-          [[ "${{ inputs.bbr_enable }}" != "false" ]] && { echo "CONFIG_TCP_CONG_BBR=y"; [[ "${{ inputs.bbr_enable }}" == "default" ]] && echo "CONFIG_DEFAULT_TCP_CONG=bbr"; } >> arch/arm64/configs/gki_defconfig
-
-      - name: Build Kernel Binary
+      - name: Final Build
         run: |
           cd kernel_workspace/common
           echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
-          export PATH="../clang18/bin:../build-tools/bin:$PATH"
-          
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
-          chmod 777 ./*.so
-          export LD_PRELOAD="$(pwd)/libfakestat.so $(pwd)/libfaketimeMT.so"
-          export FAKESTAT="2025-05-25 12:00:00"
-          export FAKETIME="@2025-05-25 13:00:00"
+          export PATH="$GITHUB_WORKSPACE/kernel_workspace/clang18/bin:$GITHUB_WORKSPACE/kernel_workspace/build-tools/bin:$PATH"
           
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out gki_defconfig
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out Image
 
-      - name: Save Ccache
-        if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
-
-      - name: Package AnyKernel3
-        id: create_zip
+      - name: Package
         run: |
           cd kernel_workspace
           git clone https://github.com/cctv18/AnyKernel3 --depth=1
           cp common/out/arch/arm64/boot/Image ./AnyKernel3/
-          cd AnyKernel3
-          AK3_NAME="AnyKernel3_SM8750_${{ github.event.inputs.ksu_type }}_$(date +%Y%m%d).zip"
-          zip -r ../$AK3_NAME ./*
-          echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
+          cd AnyKernel3 && zip -r ../AnyKernel3_Build.zip ./*
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v7
+      - name: Upload
+        uses: actions/upload-artifact@v4
         with:
+          name: Kernel_Build
           path: kernel_workspace/*.zip
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download Artifact
-        uses: actions/download-artifact@v8
-      - name: Create GH Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "build-$(date +%Y%m%d%H%M)" *.zip --title "SM8750 Kernel Build" --notes "Full Build Integrated SUSFS v1.5.12"
