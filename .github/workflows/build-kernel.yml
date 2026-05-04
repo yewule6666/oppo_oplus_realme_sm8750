@@ -292,34 +292,33 @@ jobs:
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
 
-                        - name: 应用 KernelSU & SUSFS 补丁
+            - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd kernel_workspace
           
-          # 1. 自动处理 GitHub 认证，防止私有仓库访问失败
+          # 1. 配置 Git 自动使用 Token 认证，防止私有仓库弹出 Username 提示
           git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在从 GitLab 获取 susfs v1.5.12 补丁..."
 
-            # 2. 从 GitLab 拉取内核侧补丁
+            # 2. 从 GitLab 克隆补丁 (解决原 GitHub 地址失效/身份验证问题)
             git clone --depth=1 --branch v1.5.12 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
 
             # 3. 从 OKI 专用仓库拉取适配文件
             git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4oki -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
 
-            # 4. 获取额外的隐藏补丁
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
 
-            # 5. 准备补丁文件
+            # 4. 整合补丁文件到内核目录
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4oki/kernel_patches/fs/* ./common/fs/
             cp ./susfs4oki/kernel_patches/include/linux/* ./common/include/linux/
 
-            # 6. 执行内核补丁应用
+            # 5. 执行补丁应用
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
@@ -328,7 +327,7 @@ jobs:
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
 
-          # 7. 针对各分支应用 KSU 侧补丁
+          # 6. 为各分支单独应用 KSU 侧的 susfs 补丁
           if [[ ${{ github.event.inputs.ksu_type }} == "resukisu" || ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             echo "正在为 (Re)SukiSU 应用 KSU 侧 susfs 补丁..."
             cp ./susfs4ksu/kernel_patches/SukiSU/10_enable_susfs_for_sukisu.patch ./KernelSU/
@@ -342,6 +341,7 @@ jobs:
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
             cd ..
           fi
+
 
       - name: 应用 lz4kd 补丁
         if: inputs.lz4kd_enable
