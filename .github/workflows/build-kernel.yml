@@ -1,4 +1,4 @@
-name: 6.6.89 OPlus OKI Kernel Quick Build
+name: 6.6.89 OPlus OKI Kernel Full Build
 
 env:
   TZ: Asia/Shanghai
@@ -16,12 +16,7 @@ on:
         required: true
         type: choice
         default: 'resukisu'
-        options:
-          - 'resukisu'
-          - 'sukisu'
-          - 'ksunext'
-          - 'ksu'
-          - 'none'
+        options: [ 'resukisu', 'sukisu', 'ksunext', 'ksu', 'none' ]
       susfs_enable:
         description: 'Enable SUSFS'
         required: true
@@ -32,31 +27,25 @@ on:
         required: true
         type: choice
         default: 'false'
-        options:
-          - 'false'
-          - 'builtin'
-          - 'kpm'
+        options: [ 'false', 'builtin', 'kpm' ]
       lz4_enable:
-        description: 'Enable lz4 1.10.0 + zstd 1.5.7 patch'
+        description: 'Enable LZ4 1.10.0 + ZSTD 1.5.7'
         required: true
         type: boolean
         default: 'true'
       lz4kd_enable:
-        description: 'Enable LZ4KD patch'
+        description: 'Enable LZ4KD'
         required: true
         type: boolean
         default: 'false'
       bbr_enable:
-        description: "BBR Algorithm"
+        description: 'BBR Algorithm'
         required: true
         type: choice
         default: 'false'
-        options:
-          - 'false'
-          - 'true'
-          - 'default'
+        options: [ 'false', 'true', 'default' ]
       better_net:
-        description: 'Network Function Extension (ipset/iptables)'
+        description: 'Network Features (ipset/iptables)'
         required: true
         type: boolean
         default: 'false'
@@ -66,7 +55,7 @@ on:
         type: boolean
         default: 'true'
       rekernel_enable:
-        description: 'Enable Re-Kernel Support'
+        description: 'Enable Re-Kernel'
         required: true
         type: boolean
         default: 'false'
@@ -76,12 +65,7 @@ on:
         type: boolean
         default: 'true'
       ccache_update:
-        description: 'Update ccache'
-        required: true
-        type: boolean
-        default: 'false'
-      ccache_debug:
-        description: 'Upload Ccache Debug Logs'
+        description: 'Update Ccache'
         required: true
         type: boolean
         default: 'false'
@@ -101,7 +85,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Init Environment and LLVM-Clang18
+      - name: Environment Initialization
         run: |
           rm -rf kernel_workspace && mkdir kernel_workspace && cd kernel_workspace
           sudo apt-mark hold firefox libc-bin && sudo apt purge man-db && sudo rm -rf /var/lib/man-db/auto-update
@@ -111,22 +95,21 @@ jobs:
           sudo cp -f ./ccache /usr/bin/ccache && sudo chmod +x /usr/bin/ccache && rm -f ./ccache
           
           aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8750/archive/refs/heads/oneplus/sm8750_v_16.0.0_oneplus_13_6.6.89.zip -o common.zip
-          unzip -q common.zip && mv android_kernel_common_oneplus_sm8750* common && rm common.zip
+          unzip -q common.zip && mv "android_kernel_common_oneplus_sm8750-oneplus-sm8750_v_16.0.0_oneplus_13_6.6.89" common && rm -rf common.zip
           
           mkdir -p clang18
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip -o clang.zip
-          unzip -q clang.zip -d clang18 && rm clang.zip
+          unzip -q clang.zip -d clang18 && rm -rf clang.zip
           
           aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/build-tools.zip -o build-tools.zip
-          unzip -q build-tools.zip && rm build-tools.zip
+          unzip -q build-tools.zip && rm -rf build-tools.zip
           
-          wait
           rm common/android/abi_gki_protected_exports_* || true
           for f in common/scripts/setlocalversion; do
             sed -i 's/ -dirty//g' "$f"
           done
 
-      - name: Setup Ccache Dir
+      - name: Setup Ccache Config
         run: |
           echo "CCACHE_DIR=$HOME/.ccache_${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
@@ -140,7 +123,7 @@ jobs:
           restore-keys: |
             ${{ env.CCACHE_KEY }}-${{ runner.os }}-
 
-      - name: Public Ccache Restore
+      - name: Fetch Public Ccache
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -153,14 +136,7 @@ jobs:
             tar -I zstd -xf "$FILE_NAME" -C ${{ env.CCACHE_DIR }}
           fi
 
-      - name: Config Ccache
-        run: |
-          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
-          ccache -M 3G
-          ccache -o compression=true
-          ccache -s
-
-      - name: Add KernelSU
+      - name: Initialize KernelSU
         id: ksu_version
         run: |
           cd kernel_workspace
@@ -191,7 +167,7 @@ jobs:
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           fi
 
-      - name: Apply SUSFS v1.5.12 and Logic
+      - name: Integrate SUSFS v1.5.12 & Patches
         if: inputs.susfs_enable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -221,77 +197,49 @@ jobs:
               cd ./KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch || true && cd ..
             fi
             
-            {
-              echo "CONFIG_KSU_SUSFS=y"
-              echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
-              echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
-              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y"
-              echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y"
-              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
-              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
-            } >> ./common/arch/arm64/configs/gki_defconfig
+            cat >> ./common/arch/arm64/configs/gki_defconfig <<EOF
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          EOF
           fi
 
-      - name: Apply lz4 & zstd Patch
-        if: inputs.lz4_enable
+      - name: Apply LZ4 / ADIOS / BBG / Network
         run: |
           cd kernel_workspace
-          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME build_assets
-          cp ./build_assets/zram_patch/001-lz4.patch ./common/
-          cp ./build_assets/zram_patch/lz4armv8.S ./common/lib/
-          cp ./build_assets/zram_patch/002-zstd.patch ./common/
-          cd ./common
-          git apply -p1 < 001-lz4.patch || true
-          patch -p1 < 002-zstd.patch || true
-
-      - name: Apply LZ4KD
-        if: inputs.lz4kd_enable
-        run: |
-          cd kernel_workspace
-          git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+          # LZ4/ZSTD
+          if [[ "${{ inputs.lz4_enable }}" == "true" ]]; then
+            git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME build_assets
+            cp ./build_assets/zram_patch/001-lz4.patch ./common/
+            cp ./build_assets/zram_patch/lz4armv8.S ./common/lib/
+            cp ./build_assets/zram_patch/002-zstd.patch ./common/
+            cd ./common && git apply -p1 < 001-lz4.patch || true && patch -p1 < 002-zstd.patch || true && cd ..
+          fi
+          # LZ4KD
+          if [[ "${{ inputs.lz4kd_enable }}" == "true" ]]; then
+            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+            cd common
+            cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
+            cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
+            cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
+            cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
+            patch -p1 -F 3 < lz4kd.patch || true && cd ..
+          fi
+          # ADIOS/BBG/Net/BBR
           cd common
-          cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
-          cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
-          cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
-          cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
-          patch -p1 -F 3 < lz4kd.patch || true
+          [[ "${{ inputs.adios_enable }}" == "true" ]] && { echo "CONFIG_MQ_IOSCHED_ADIOS=y"; echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y"; } >> arch/arm64/configs/gki_defconfig
+          [[ "${{ inputs.rekernel_enable }}" == "true" ]] && echo "CONFIG_REKERNEL=y" >> arch/arm64/configs/gki_defconfig
+          [[ "${{ inputs.baseband_guard }}" == "true" ]] && { echo "CONFIG_BBG=y"; curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash; } >> arch/arm64/configs/gki_defconfig
+          [[ "${{ inputs.better_net }}" == "true" ]] && { echo "CONFIG_IP_SET=y"; echo "CONFIG_IP_SET_HASH_IP=y"; } >> arch/arm64/configs/gki_defconfig
+          [[ "${{ inputs.bbr_enable }}" != "false" ]] && { echo "CONFIG_TCP_CONG_BBR=y"; [[ "${{ inputs.bbr_enable }}" == "default" ]] && echo "CONFIG_DEFAULT_TCP_CONG=bbr"; } >> arch/arm64/configs/gki_defconfig
 
-      - name: Better Net Configuration
-        if: inputs.better_net
-        run: |
-          cd kernel_workspace/common
-          {
-            echo "CONFIG_IP_SET=y"
-            echo "CONFIG_IP_SET_HASH_IP=y"
-            echo "CONFIG_IP_SET_HASH_NET=y"
-            echo "CONFIG_NETFILTER_XT_SET=y"
-          } >> arch/arm64/configs/gki_defconfig
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/config.patch
-          patch -p1 -F 3 < config.patch || true
-
-      - name: ADIOS & BBG & BBR Logic
-        run: |
-          cd kernel_workspace/common
-          if [[ "${{ inputs.adios_enable }}" == "true" ]]; then
-            echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> arch/arm64/configs/gki_defconfig
-          fi
-          if [[ "${{ inputs.rekernel_enable }}" == "true" ]]; then
-            echo "CONFIG_REKERNEL=y" >> arch/arm64/configs/gki_defconfig
-          fi
-          if [[ "${{ inputs.baseband_guard }}" == "true" ]]; then
-            echo "CONFIG_BBG=y" >> arch/arm64/configs/gki_defconfig
-            curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
-            sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
-          fi
-          if [[ "${{ inputs.bbr_enable }}" != "false" ]]; then
-            echo "CONFIG_TCP_CONG_BBR=y" >> arch/arm64/configs/gki_defconfig
-            [[ "${{ inputs.bbr_enable }}" == "default" ]] && echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> arch/arm64/configs/gki_defconfig
-          fi
-
-      - name: Build Kernel Core
+      - name: Build Kernel Binary
         run: |
           cd kernel_workspace/common
           echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
@@ -314,7 +262,7 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ env.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
 
-      - name: AnyKernel3 Packaging
+      - name: Package AnyKernel3
         id: create_zip
         run: |
           cd kernel_workspace
@@ -338,8 +286,8 @@ jobs:
     steps:
       - name: Download Artifact
         uses: actions/download-artifact@v8
-      - name: Release
+      - name: Create GH Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "build-$(date +%Y%m%d%H%M)" *.zip --title "SM8750 Kernel" --notes "Integrated SUSFS v1.5.12"
+          gh release create "build-$(date +%Y%m%d%H%M)" *.zip --title "SM8750 Kernel Build" --notes "Full Build Integrated SUSFS v1.5.12"
