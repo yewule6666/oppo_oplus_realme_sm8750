@@ -292,34 +292,34 @@ jobs:
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
 
-            - name: 应用 KernelSU & SUSFS 补丁
+                  - name: 应用 KernelSU & SUSFS 补丁
         if: inputs.susfs_enable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd kernel_workspace
           
-          # 自动处理 GitHub 认证，防止私有仓库或限流导致克隆失败
+          # 1. 自动处理 GitHub 认证，防止私有仓库访问失败
           git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
           if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
             echo "正在从 GitLab 获取 susfs v1.5.12 补丁..."
 
-            # 1. 从 GitLab 拉取内核侧补丁
+            # 2. 从 GitLab 拉取内核侧补丁
             git clone --depth=1 --branch v1.5.12 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
 
-            # 2. 从 OKI 专用仓库拉取适配文件 (SM8750 专用)
+            # 3. 从 OKI 专用仓库拉取适配文件
             git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4oki -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
 
-            # 获取额外的隐藏补丁
+            # 4. 获取额外的隐藏补丁
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
 
-            # 3. 准备补丁文件：将 GitLab 和专用适配库的文件整合到内核源码树
+            # 5. 准备补丁文件
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4oki/kernel_patches/fs/* ./common/fs/
             cp ./susfs4oki/kernel_patches/include/linux/* ./common/include/linux/
 
-            # 4. 执行补丁修补
+            # 6. 执行内核补丁应用
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
@@ -328,10 +328,9 @@ jobs:
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
 
-          # 5. 针对 ReSukiSU 应用特定的 SUSFS 支持补丁
+          # 7. 针对 ReSukiSU 应用特定的 SUSFS 支持补丁
           if [[ ${{ github.event.inputs.ksu_type }} == "resukisu" ]]; then
             echo "正在为 ReSukiSU 应用 KSU 侧 susfs 补丁..."
-            # ReSukiSU 兼容 SukiSU 的补丁结构
             cp ./susfs4ksu/kernel_patches/SukiSU/10_enable_susfs_for_sukisu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_sukisu.patch || true
